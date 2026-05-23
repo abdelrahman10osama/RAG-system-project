@@ -3,6 +3,7 @@ langchain-google-genai
 langchain-chroma
 langchain-community
 langchain-text-splitters
-chromadb
+chromadb==0.4.24
+protobuf==4.25.3
 pypdf
 numpy
