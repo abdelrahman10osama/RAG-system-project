@@ -2,10 +2,11 @@ import streamlit as st
 import os
 import tempfile
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 # =========================
@@ -16,14 +17,14 @@ st.title("🗺️ Chat with Your GIS Documents (RAG System)")
 
 
 # =========================
-# 🔑 Sidebar (API + Upload)
+# 🔑 Sidebar
 # =========================
 with st.sidebar:
     st.header("⚙️ Settings")
-    api_key = st.text_input("Gemini API Key", type="password")
+    api_key = st.text_input("Gemini API Key (for Chat LLM)", type="password")
     uploaded_files = st.file_uploader(
-        "📄 Upload GIS PDF(s)", 
-        type="pdf", 
+        "📄 Upload GIS PDF(s)",
+        type="pdf",
         accept_multiple_files=True
     )
 
@@ -35,7 +36,7 @@ os.environ["GOOGLE_API_KEY"] = api_key
 
 
 # =========================
-# ✂️ Text Splitter (IMPORTANT)
+# ✂️ Text Splitter
 # =========================
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
@@ -44,7 +45,15 @@ splitter = RecursiveCharacterTextSplitter(
 
 
 # =========================
-# 📚 Process PDFs → RAG Pipeline
+# 🔢 Embeddings (FIXED - NO GEMINI)
+# =========================
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+
+# =========================
+# 📚 Process PDFs
 # =========================
 if uploaded_files and "vectorstore" not in st.session_state:
 
@@ -54,7 +63,7 @@ if uploaded_files and "vectorstore" not in st.session_state:
 
         for uploaded_file in uploaded_files:
 
-            # Save temp PDF
+            # Save temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(uploaded_file.read())
                 tmp_path = tmp.name
@@ -63,22 +72,14 @@ if uploaded_files and "vectorstore" not in st.session_state:
             loader = PyPDFLoader(tmp_path)
             docs = loader.load()
 
-            # Split into CHUNKS (IMPORTANT FIX)
+            # Chunking (IMPORTANT)
             chunks = splitter.split_documents(docs)
             all_chunks.extend(chunks)
 
-            # Cleanup
             os.unlink(tmp_path)
 
         # =========================
-        # 🔢 Embeddings
-        # =========================
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="gemini-embedding-001"
-        )
-
-        # =========================
-        # 💾 Vector DB (FIXED)
+        # 💾 Vector DB
         # =========================
         vectorstore = Chroma.from_documents(
             documents=all_chunks,
@@ -90,22 +91,19 @@ if uploaded_files and "vectorstore" not in st.session_state:
         st.session_state.chunks_count = len(all_chunks)
         st.session_state.files_count = len(uploaded_files)
 
-        # =========================
-        # 📊 Stats (LAB REQUIREMENT)
-        # =========================
+        # Stats (LAB requirement)
         st.session_state.stats = {
             "total_questions": 0,
             "retrieved_chunks": 0
         }
 
     st.success(
-        f"✅ Processed {len(uploaded_files)} files | "
-        f"{len(all_chunks)} chunks created!"
+        f"✅ Processed {len(uploaded_files)} files | {len(all_chunks)} chunks"
     )
 
 
 # =========================
-# 🤖 LLM Setup
+# 🤖 LLM (Gemini for answers only)
 # =========================
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
@@ -121,15 +119,14 @@ if "vectorstore" in st.session_state:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Show chat history
+    # history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # Input
+    # input
     if question := st.chat_input("Ask about your GIS documents..."):
 
-        # Update stats
         st.session_state.stats["total_questions"] += 1
 
         st.session_state.messages.append(
@@ -143,7 +140,7 @@ if "vectorstore" in st.session_state:
             with st.spinner("🤔 Searching GIS knowledge base..."):
 
                 # =========================
-                # 🔍 RETRIEVAL STEP (RAG CORE)
+                # 🔍 Retrieval (CORE RAG)
                 # =========================
                 docs = st.session_state.vectorstore.similarity_search(
                     question,
@@ -157,13 +154,13 @@ if "vectorstore" in st.session_state:
                 )
 
                 # =========================
-                # 🧠 Prompt Engineering (RAG)
+                # 🧠 Prompt
                 # =========================
                 prompt = f"""
 You are a GIS expert assistant.
 
-Use ONLY the context below to answer the question.
-If answer is not in context, say:
+Use ONLY the context below.
+If answer is not found, say:
 "I don't have enough information in the documents."
 
 Context:
@@ -172,11 +169,11 @@ Context:
 Question:
 {question}
 
-Answer clearly and concisely:
+Answer:
 """
 
                 # =========================
-                # 🤖 LLM Call
+                # 🤖 LLM call
                 # =========================
                 response = llm.invoke(prompt)
                 answer = response.content
@@ -184,12 +181,12 @@ Answer clearly and concisely:
                 st.write(answer)
 
                 # =========================
-                # 📚 Sources (LAB REQUIREMENT)
+                # 📚 Sources
                 # =========================
                 with st.expander("📚 Retrieved Sources"):
                     for i, doc in enumerate(docs, 1):
                         page = doc.metadata.get("page", "?")
-                        st.write(f"**Source {i} - Page {page}**")
+                        st.write(f"**Source {i} (Page {page})**")
                         st.write(doc.page_content[:300] + "...")
 
         st.session_state.messages.append(
@@ -198,13 +195,14 @@ Answer clearly and concisely:
 
 
 # =========================
-# 📊 Sidebar Stats Display
+# 📊 Stats Sidebar
 # =========================
 with st.sidebar:
     if "stats" in st.session_state:
         st.markdown("---")
-        st.subheader("📊 Session Stats")
+        st.subheader("📊 Stats")
+
         st.write("Questions:", st.session_state.stats["total_questions"])
-        st.write("Chunks Retrieved:", st.session_state.stats["retrieved_chunks"])
+        st.write("Chunks retrieved:", st.session_state.stats["retrieved_chunks"])
         st.write("Files:", st.session_state.get("files_count", 0))
         st.write("Chunks:", st.session_state.get("chunks_count", 0))
